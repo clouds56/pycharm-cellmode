@@ -12,11 +12,19 @@ import com.intellij.openapi.module.Module;
 import com.intellij.openapi.project.Project;
 import com.intellij.util.Consumer;
 import com.intellij.util.NotNullFunction;
+import com.intellij.xdebugger.frame.XValueChildrenList;
 import com.jetbrains.python.console.*;
 import com.jetbrains.python.console.pydev.PydevCompletionVariant;
+import com.jetbrains.python.debugger.PyDebugValue;
+import com.jetbrains.python.debugger.PyDebuggerException;
+import com.jetbrains.python.debugger.PyFrameAccessor;
+import com.jetbrains.python.debugger.pydev.GetVariableCommand;
+import com.jetbrains.python.debugger.pydev.PyDebugCallback;
 import org.jetbrains.annotations.NotNull;
 
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
 
 /**
@@ -170,6 +178,51 @@ public class PythonConsoleUtils {
             // }
             // System.out.println("completionVariants: " + completionVariants.size() + ", content: " + stringBuilder.toString());
             return completionVariants;
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        return null;
+    }
+
+    public static PyDebugValue getVariable(final Project project, final String variable) {
+        if (project == null) {
+            return null;
+        }
+
+        Collection<RunContentDescriptor> consoles = getConsoles(project);
+        if (!consoles.isEmpty()) {
+            RunContentDescriptor descriptor = consoles.iterator().next();
+            if (descriptor != null && descriptor.getProcessHandler() instanceof PyConsoleProcessHandler) {
+                PyConsoleProcessHandler processHandler = (PyConsoleProcessHandler) descriptor.getProcessHandler();
+                if (processHandler != null) {
+                    return getVariableInConsole(processHandler.getPydevConsoleCommunication(), variable);
+                }
+            }
+        }
+        return null;
+
+    }
+
+    private static PyDebugValue getVariableInConsole(@NotNull PydevConsoleCommunication consoleCommunication, @NotNull String variable) {
+        try {
+            PyDebugValue var = consoleCommunication.evaluate(variable, true, true);
+            // XValueChildrenList result = consoleCommunication.loadVariable(var);
+            ArrayList<PyFrameAccessor.PyAsyncValue<String>> valuesForEvaluation = new ArrayList<>();
+            valuesForEvaluation.add(new PyFrameAccessor.PyAsyncValue<>(var, new PyDebugCallback<String>() {
+
+                @Override
+                public void ok(String value) {
+                    var.setValue(value);
+                    System.out.println("var name: " + GetVariableCommand.composeName(var) + ", result: " + value);
+                }
+
+                @Override
+                public void error(PyDebuggerException exception) {
+
+                }
+            }));
+            consoleCommunication.loadAsyncVariablesValues(valuesForEvaluation);
+            return var;
         } catch (Exception e) {
             e.printStackTrace();
         }
