@@ -42,7 +42,7 @@ public class PythonConsoleUtils {
             public void consume(PyCodeExecutor codeExecutor) {
                 executeInConsole(codeExecutor, selectionText, editor);
             }
-        }, editor, project, module);
+        }, project, module);
     }
 
     private static void selectConsole(@NotNull DataContext dataContext, @NotNull Project project,
@@ -85,8 +85,8 @@ public class PythonConsoleUtils {
         }
     }
 
-    private static void findCodeExecutor(AnActionEvent e, Consumer<PyCodeExecutor> consumer, Editor editor, Project project, Module module) {
-        if (project != null && editor != null) {
+    private static void findCodeExecutor(AnActionEvent e, Consumer<PyCodeExecutor> consumer, Project project, Module module) {
+        if (project != null) {
             if (canFindConsole(e)) {
                 selectConsole(e.getDataContext(), project, consumer);
             }
