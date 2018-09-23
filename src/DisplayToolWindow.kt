@@ -4,6 +4,7 @@ import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.DefaultActionGroup
+import com.intellij.openapi.application.PathManager
 import com.intellij.openapi.project.DumbAware
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.SimpleToolWindowPanel
@@ -12,21 +13,26 @@ import com.intellij.openapi.wm.ToolWindowFactory
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.content.Content
 import com.intellij.ui.content.ContentFactory
+import com.intellij.util.TimeoutUtil
 import org.bouncycastle.util.encoders.Base64
 import org.zeromq.ZContext
 import org.zeromq.ZMQ
 import java.awt.BorderLayout
 import java.awt.image.BufferedImage
-import java.io.ByteArrayInputStream
+import java.io.*
+import java.nio.file.Paths
 import javax.imageio.ImageIO
 import javax.swing.BoxLayout
 import javax.swing.ImageIcon
 import javax.swing.JLabel
 import javax.swing.JPanel
+import kotlin.concurrent.thread
 
 
 class DisplayToolWindow : ToolWindowFactory, DumbAware {
-    private val PORT_VARIABLE = "sys.modules['pydev_publisher'].port"
+    private val PUBLISH_MODULE = "pydev_publisher"
+    private val PORT_VARIABLE = "sys.modules['$PUBLISH_MODULE'].port"
+    private val STARTUP_FILE = "/startup.py"
 
     private lateinit var myToolWindow: ToolWindow
     private lateinit var myProject: Project
@@ -52,22 +58,27 @@ class DisplayToolWindow : ToolWindowFactory, DumbAware {
         }
     }
 
-    fun addItem(img: BufferedImage) {
+    @Synchronized fun addItem(img: BufferedImage) {
         myMainPanel?.add(JLabel(ImageIcon(img)), 0)
         myMainPanel?.revalidate()
     }
 
-    fun connect() {
+    fun connect(): Boolean? {
         myStatusBar?.text = "querying port..."
         val portVar = PythonConsoleUtils.getVariable(myProject, PORT_VARIABLE)
-        val port = portVar.value?.toIntOrNull()
+        var port = portVar.value?.toIntOrNull()
+        if (portVar.type == "KeyError" && portVar.value == "'$PUBLISH_MODULE'") {
+            myStatusBar?.text = "publisher not initialized"
+            return null
+        }
         if (portVar.type != "int" || port == null) {
             myStatusBar?.text = "query port failed"
-            return
+            return false
         }
         myStatusBar?.text = "connecting to $port..."
         mySubscribers.add(Subscriber(port))
         myStatusBar?.text = "connected to $port"
+        return true
     }
 
     private fun createActionBar(panel : JPanel) {
@@ -108,8 +119,9 @@ class DisplayToolWindow : ToolWindowFactory, DumbAware {
         val myThread: Thread
         var mySocket: ZMQ.Socket? = null
         init {
-            myThread = Thread(::connectToPublisher)
-            myThread.start()
+            myThread = thread(start = true) {
+                connectToPublisher()
+            }
         }
 
         fun connectToPublisher() {
@@ -148,7 +160,38 @@ class DisplayToolWindow : ToolWindowFactory, DumbAware {
 
     inner class ConnectAction : AnAction(AllIcons.Plugins.Downloads) {
         override fun actionPerformed(event: AnActionEvent) {
-            connect()
+            if (connect() == null) {
+                InitializeAction().actionPerformed(event)
+                TimeoutUtil.sleep(300)
+                if (connect() != true) {
+                    myStatusBar?.text = "publisher installing, retry again"
+                }
+            }
+        }
+    }
+
+    inner class InitializeAction : AnAction(AllIcons.Actions.Install) {
+        override fun actionPerformed(event: AnActionEvent) {
+            val file = extract(STARTUP_FILE)
+            myStatusBar?.text = "installing publisher..."
+            PythonConsoleUtils.execute(event, "%run \"$file\"\n%matplotlib inline\n")
+        }
+
+        fun extract(file: String): String {
+            val outDir = Paths.get(PathManager.getPluginTempPath(), "PythonCellMode", "lib").toString()
+            val dir = File(outDir)
+            if (!dir.exists()) {
+                dir.mkdirs()
+            }
+            val outFile = Paths.get(outDir, file).toString()
+
+            myStatusBar?.text = "extract to $outFile..."
+            this.javaClass.getResourceAsStream(file).use { inFile ->
+                FileOutputStream(outFile).use {
+                    inFile.copyTo(it)
+                }
+            }
+            return outFile
         }
     }
 }
